@@ -29,8 +29,9 @@ C:\Users\arnev\.claude\skills\blender-helper\
     ├── INDEX.md                   ← unified index of all solutions (scripts + addons)
     ├── scripts\
     │   └── [problem-slug]\
-    │       ├── README.md          ← problem, algorithm, prerequisites (English) + frontmatter
-    │       └── solution.py        ← parametrized one-shot Blender Python script
+    │       ├── README.md              ← problem, algorithm, prerequisites (English) + frontmatter
+    │       ├── solution_4.1.py        ← parametrized script for Blender 4.1
+    │       └── solution_4.2.py        ← version-specific variant (only if code differs from 4.1)
     └── addons\
         └── [addon-slug]\
             ├── README.md          ← what the addon does, when to use it, restart needed? + frontmatter
@@ -43,11 +44,14 @@ C:\Users\arnev\.claude\skills\blender-helper\
 ---
 blender_version: "4.1"
 tested_on: "4.1, 4.2"
-api_sensitive: false   # true if Blender API calls are version-dependent
+api_sensitive: false        # true if Blender API calls are version-dependent
+reference_version: "4.1"   # version file considered the most complete implementation
 ---
 ```
 
 `api_sensitive: true` applies to scripts using e.g. Rigify operators, `bpy.ops.pose.*`, or other APIs known to change between minor versions.
+
+`reference_version` always points to the solution file with the most up-to-date logic. Updated automatically when a new version file is created or an existing one is substantially improved. Used to detect drift between version files (see Version Handling below).
 
 **INDEX.md columns:**
 
@@ -58,6 +62,8 @@ api_sensitive: false   # true if Blender API calls are version-dependent
 | addons/seredos-backup | ... | backup, handler | 4.1 | true | done |
 | scripts/fix-hand-weights | Fix hand deformation after rebind | rig, weights | 4.1 | false | WIP |
 ```
+
+**Note:** `Blender Version` refers to the **Blender application version** the solution was written and tested against (e.g. `4.1`). It is not a solution/changelog version number. Multiple tested versions are listed in the README frontmatter (`tested_on`), not in INDEX.md.
 
 **Scripts vs. Addons – when to use which:**
 
@@ -92,8 +98,8 @@ The skill uses `get_scene_info` to find object names / armature structure. It ma
 4. Implement iteratively via `execute_blender_code` in small chunks
 5. When the solution looks complete: inform the user — *"Looks done. Run it to verify, then tell me to mark it as complete."* Do **not** save files or update status automatically.
 6. On explicit user confirmation:
-   - Write `library/scripts/[problem-slug]/README.md` – problem, algorithm, prerequisites (English) + frontmatter (auto-populate: current Blender version; `api_sensitive: false` by default, set `true` if Rigify operators, `bpy.ops.pose.*` or other version-sensitive APIs are used)
-   - Write `library/scripts/[problem-slug]/solution.py` – parametrized Python script (English comments; all object/bone names as variables at top)
+   - Write `library/scripts/[problem-slug]/README.md` – problem, algorithm, prerequisites (English) + frontmatter (auto-populate: current Blender version; `api_sensitive: false` by default, set `true` if Rigify operators, `bpy.ops.pose.*` or other version-sensitive APIs are used; set `reference_version` to current Blender version)
+   - Write `library/scripts/[problem-slug]/solution_{version}.py` – parametrized Python script (English; all object/bone names as variables at top; decision-comments inline — see Code Comments below)
    - Update INDEX.md: status `WIP` → `done`
 
 **Note:** Information-gathering scripts (for analysis) are also valid library entries, tagged `analysis`.
@@ -103,42 +109,16 @@ The skill uses `get_scene_info` to find object names / armature structure. It ma
 
 1. Read `library/INDEX.md` to find matching solution
 2. Get minimum required context (e.g., object name via `get_scene_info`)
-3. **Version check:** Query current Blender version via `execute_blender_code` (`print(bpy.app.version_string)`). Compare with `blender_version` from INDEX.md / README.md.
-   - `api_sensitive: false` → brief info to user ("Entry was created for 4.1, you're on 4.2 – should be compatible"), proceed
-   - `api_sensitive: true` + mismatch → see **Version Mismatch Handling** below
-4. Execute `solution.py` via `execute_blender_code` with correct parameters
-5. **On error:** Read and analyze the error, present findings to user, decide together whether to update the library entry or adapt parameters
-
-### Version Mismatch Handling
-
-When `api_sensitive: true` and Blender version differs from the recorded version:
-
-```
-Skill informs user:
-  "This solution was written for Blender 4.1. You're running 4.2.
-   The script uses version-sensitive APIs.
-   Options:
-   A) Run anyway – I'll analyze any errors and adapt on the fly
-   B) Let me generate a version-adapted script first"
-```
-
-**Option A (Run anyway):**
-- Execute script, catch errors
-- On failure: skill analyzes API changes, adapts script, saves adapted version
-- Update README.md Version History section
-
-**Option B (Adapt first):**
-- Skill reads `solution.py`, analyzes deprecated/changed API calls
-- Creates adapted version, shows diff to user
-- After confirmation: update `solution.py` + update README.md frontmatter and Version History
-
-**`solution.py` is always the latest version.** No parallel version files. Archive only on explicit user request. Version history tracked in README.md:
-
-```markdown
-## Version History
-- 4.1: Initial version
-- 4.2: Updated `bpy.ops.object.armature_basic_human_metarig_add` → new API
-```
+3. **Version check:** Query current Blender version via `execute_blender_code` (`print(bpy.app.version_string)`). Look for `solution_{version}.py` in the solution directory.
+   - Exact match found → run it directly
+   - No exact match → warn user, note which version will be used instead, proceed
+4. **Reference version check:** Read `reference_version` from README.md frontmatter. If running version ≠ `reference_version`: inform user that the reference version differs and improvements may not be present in the version being run.
+5. **Always try first.** Execute the selected `solution_{version}.py` via `execute_blender_code` with correct parameters. There is no "adapt first" option — running gives either a working result or concrete error information to act on.
+6. **On success:** Prompt user to confirm it worked. User confirmation is a signal, not a guarantee — skill re-evaluates on every run regardless.
+   - No code changes needed → add version to `tested_on` in README.md frontmatter (no new file)
+7. **On error:** Read and analyze error, then assess and inform user of chosen path before acting:
+   - **Extend:** existing `solution_{version}.py` can be made to support both versions (version-neutral rewrite or inline version check) → update the existing file in place, update `tested_on` and frontmatter. No new file created.
+   - **Rewrite:** new version requires fundamentally different logic → create `solution_{new_version}.py`. Existing files are never touched. Update `reference_version` to the new file.
 
 ---
 
@@ -163,9 +143,15 @@ Must cover:
 
 **Parametrization is silent.** The skill enforces it internally when writing scripts, but doesn't need to explain this to the user every time.
 
+**Only the user promotes WIP to done.** The skill never changes a library entry's status from `WIP` to `done` on its own — not after a successful run, not after saving files. It informs the user when it believes a solution is complete and waits for explicit confirmation.
+
 **Error handling is collaborative.** When execution fails, the skill analyzes the error and decides with the user: adapt parameters, update the library entry, or develop a new strategy.
 
 **No automatic screenshot.** Visual evaluation is the user's responsibility. Screenshots only when explicitly useful and requested-adjacent.
+
+**Code comments capture reasoning, not mechanics.** When writing or updating a `solution_{version}.py`, the skill adds inline comments that document *why* a specific approach was chosen — non-obvious constraints, alternative approaches that were ruled out, workarounds for Blender-specific behavior. This allows future sessions (and future instances of the skill) to reconstruct the thought process without needing the original conversation. Comments describe decisions, not what the code does.
+
+**Usage is documented in the solution file, not the README.** The README covers what the problem is, the algorithm, and prerequisites — it has no version scope. Each `solution_{version}.py` contains a `# USAGE` comment block directly below the parameter variables, explaining what each variable expects. This keeps usage docs automatically in sync with the code and handles version-specific parameter differences naturally.
 
 ---
 
@@ -174,6 +160,20 @@ Must cover:
 1. `SKILL.md` — the skill prompt (YAML frontmatter required; ≤ 4 000 chars total)
 2. `library/INDEX.md` — solution index, pre-populated with entries from existing addon code; includes `Status` column (`done` | `WIP`)
 3. `setup/blender-mcp-setup.md` — Blender MCP installation and activation guide
+
+### How initial library entries are created
+
+**Operation scripts** are not written from scratch. They are extracted from the existing addon source files at `E:\development\ai-villager\Blender\addons\`. The implementation step is:
+1. Read the source file (e.g. `seredos_rigify/rigify_fix.py`)
+2. Extract the core logic — strip all operator/panel/UI boilerplate, keep only the algorithmic functions
+3. Parametrize: move all object/bone/path names to variables at the top of the script
+4. Adapt to MCP context: no `bpy.ops` where avoidable, plain Python + `bpy.data` / `bpy.context` calls
+
+**Addon entries** are copied directly from the existing addon directories. Only `README.md` and frontmatter are newly authored.
+
+**Analysis scripts** are the one exception — they are written from scratch, informed by what the existing addon code looks for (bone names, modifier targets, etc.).
+
+---
 
 ### Initial library entries (from existing addon code)
 
@@ -200,9 +200,15 @@ These are written from scratch, informed by the existing addon code (what to loo
 | Slug | Source | What it does | Restart? |
 |---|---|---|---|
 | `addons/seredos-backup` | `seredos_backup/` | Auto-backup before save via persistent handler | Yes (load_post handler) |
-| `addons/seredos-item-handpose` | `seredos_item_handpose/` | Item slot + hand pose authoring panel | No |
+
+Note: `seredos_item_handpose` was never completed and is not included in the initial library.
 
 **Addon version handling:** The skill reads `bl_info["blender"]` from the addon source and compares with the current Blender version. On mismatch: warn user. Optional: update `bl_info["blender"]` declaratively if user requests it. On post-install errors: same adapt flow as scripts. All initial addon entries get README.md frontmatter populated with current Blender version at creation time.
+
+**seredos-backup — special skill behavior:**
+- On every session start: check whether `seredos-backup` is installed and enabled. If not: install and enable it automatically (warn user that a Blender restart may be needed due to the `load_post` handler).
+- After every change made via `execute_blender_code` that modifies scene data: call `bpy.ops.wm.save_mainfile()` to trigger the backup handler.
+- The skill is aware that backup history exists and can be accessed if a change needs to be reverted. If something goes wrong, inform the user that prior backups are available and offer to locate them.
 
 ---
 
